@@ -1,0 +1,50 @@
+# gitseal materializer — the `sealdctl materialize` PreSync-hook image.
+#
+# WHY THIS DIFFERS FROM THE BROKER'S Dockerfile (see .docs/lessons.md L14):
+#   The broker (Dockerfile) is pure distroless/static: one static Go binary, no
+#   shell, no extra tools. The materializer CANNOT be that thin because
+#   `sealdctl materialize` shells out to `kubectl` (apply / get / delete) instead
+#   of linking client-go — deliberately, to keep the kill-path dependency surface
+#   tiny (lessons.md L7). So this image = distroless/static + ONE extra file: a
+#   pinned, static `kubectl` binary COPY'd in.
+#
+#   It is still shell-less. kubectl is itself a fully static Go binary, so it
+#   drops into distroless/static cleanly (no libc, no /bin/sh needed), and
+#   materialize invokes it via exec.Command with an argv slice — never `sh -c` —
+#   so there is no shell to be absent. Do NOT reach for a fat base image "because
+#   it needs a tool": copy the single static binary.
+
+# ---- stage 1: build a fully static sealdctl (mirrors the broker's flags) ----
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# CGO off → fully static; trim + strip. Identical build discipline to the broker,
+# only the target differs (./cmd/sealdctl vs ./cmd/sealdbroker).
+RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build -ldflags="-s -w" -o /out/sealdctl ./cmd/sealdctl
+
+# ---- stage 2: fetch a PINNED, checksum-verified static kubectl ----
+# kubectl is client-side only (it talks to the cluster's API server); a recent
+# stable release is fine. Pinned by version AND sha256. The expected sha is the
+# published dl.k8s.io checksum for this exact version — the build hard-fails on
+# any mismatch (tamper / wrong-version tripwire). To bump: change both ARGs to the
+# new version + its published .sha256 (curl .../kubectl.sha256).
+FROM debian:12-slim AS kubectl
+ARG KUBECTL_VERSION=v1.31.5
+ARG KUBECTL_SHA256=fbecbfd375b3686002c2e81d51c390172f5ffba3d6b47920d55342cb03f557af
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl; \
+    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /tmp/kubectl; \
+    echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -; \
+    install -D -m 0755 /tmp/kubectl /out/kubectl
+
+# ---- stage 3: final — distroless/static + the two static binaries ----
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build   /out/sealdctl        /sealdctl
+COPY --from=kubectl /out/kubectl         /usr/local/bin/kubectl
+USER 65532:65532
+# The Job supplies env (GITSEAL_ENV / GITSEAL_NAMESPACE / GITSEAL_CLUSTER) and
+# any extra args (e.g. ["--identity","/etc/gitseal/identity"] or ["--emit-yaml"]).
+# Default (no args) = apply mode against the mounted identity.
+ENTRYPOINT ["/sealdctl", "materialize"]

@@ -1,0 +1,16 @@
+/dist/
+/bin/
+*.test
+*.out
+# built binaries (go build ./cmd/... drops them in-tree)
+/sealdctl
+/sealdbroker
+/seald-materialize
+# never commit real keys or secrets
+*.age-key
+seald-root.key
+.env.plain
+
+# plaintext secret drafts — NEVER commit (the whole point of this tool)
+*.env
+!*.env.example

@@ -1,0 +1,32 @@
+# golangci-lint v2 configuration for gitseal.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  # errcheck is disabled for now: the remaining unchecked returns are all best-effort
+  # (deferred Body.Close, os.Stdout.Write, fmt.Sscanf with a default fallthrough). The
+  # high-value analyzers (staticcheck, govet, unused, ineffassign) stay on. Contributions
+  # that re-enable errcheck with the necessary guards are welcome.
+  disable:
+    - errcheck
+  enable:
+    - misspell
+    - unconvert
+  exclusions:
+    rules:
+      # Test files may ignore errors on best-effort setup calls for readability.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/dawnbreather/gitseal

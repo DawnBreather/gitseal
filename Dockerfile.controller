@@ -1,0 +1,30 @@
+# gitseal-controller — per-cluster reconciler for ManagedEnvironment CRs.
+# Same shape as the materializer image (see Dockerfile.materialize / lessons L14):
+# distroless/static + ONE pinned static kubectl, shell-less. The controller shells
+# to kubectl (list CRs, seed Secret, patch status) rather than linking client-go —
+# dependency-light discipline.
+
+# ---- stage 1: static gitseal-controller ----
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build -ldflags="-s -w" -o /out/gitseal-controller ./cmd/gitseal-controller
+
+# ---- stage 2: pinned, checksum-verified static kubectl (same pin as materializer) ----
+FROM debian:12-slim AS kubectl
+ARG KUBECTL_VERSION=v1.31.5
+ARG KUBECTL_SHA256=fbecbfd375b3686002c2e81d51c390172f5ffba3d6b47920d55342cb03f557af
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl; \
+    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /tmp/kubectl; \
+    echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -; \
+    install -D -m 0755 /tmp/kubectl /out/kubectl
+
+# ---- stage 3: final ----
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build   /out/gitseal-controller /gitseal-controller
+COPY --from=kubectl /out/kubectl            /usr/local/bin/kubectl
+USER 65532:65532
+ENTRYPOINT ["/gitseal-controller"]

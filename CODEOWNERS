@@ -1,0 +1,20 @@
+# Code owners for gitseal. GitLab requires approval from a listed owner before an
+# MR touching these paths can merge (on Premium+; on all tiers the protected-branch
+# Maintainer-merge rule still applies).
+#
+# THIS is the real write-gate for sealed secrets: sealing is offline and
+# cannot be cryptographically restricted, so "who can change a prod secret" is
+# enforced here at merge time, not in the CLI.
+
+# All sealed bundles + repo key config require an owner's approval to change.
+[Sealed secrets]
+/.sealed/                @example-maintainers
+/.seald/                 @example-maintainers
+
+# Production-level bundles: tighten to Owners if you keep a separate group.
+# /.sealed/prod*.json     @example-owners
+
+# Broker deployment + key custody live in infra-repo, not here, but the broker
+# code itself is sensitive:
+/internal/broker/        @example-maintainers
+/internal/crypto/        @example-maintainers
