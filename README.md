@@ -49,12 +49,14 @@ they're deliberately different:
 | | **Seal** (encrypt) | **Unseal** (decrypt) |
 |---|---|---|
 | Needs network? | ❌ No — fully offline | ✅ Yes — calls the broker |
-| Needs permission? | ❌ No — anyone can seal | ✅ Yes — must be a current member, checked live |
+| Needs permission? | ❌ Not to *run* it — but the change only **merges** if the author's GitLab access level clears the env's threshold (CI write-authz gate) | ✅ Yes — must be a current member at the required level, checked live |
 | Uses which key? | the repo's **public** key (committed) | the repo's **private** key (only the broker has it) |
-| Analogy | dropping mail in a public mailbox | the post office checking your ID badge before handing you a package |
+| Analogy | anyone can drop mail in the box, but the mailroom won't *accept* it into the archive unless you're cleared for that shelf | the post office checking your ID badge before handing you a package |
 
-Anyone can *put a secret in*; *taking one out* is gated by your live GitLab
-membership.
+Running `seal` needs no permission (it's offline, to a public key) — but **landing**
+the change is gated: the CI **write-authz gate** (`sealdctl verify --authz`) blocks the
+merge unless the author's live GitLab access level meets the target environment's
+required level. Reading (`unseal`) is gated the same way, live, on every call.
 
 ## Which section is for me?
 
@@ -73,7 +75,9 @@ onboarded by your DevOps team.
 You only ever touch one tool: **`sealdctl`** on your laptop.
 
 - **Seal** = encrypt a value to the repo's public key (committed in `.seald/`).
-  Offline, no permission needed — anyone who can clone can contribute a secret.
+  Running it is offline and needs no permission — but the commit only **merges** if
+  the CI write-authz gate clears you for that environment (see the DevOps guide). So
+  "anyone can seal" means *produce the ciphertext locally*, not *land it unreviewed*.
 - **Unseal** = ask the broker to decrypt. It checks, *live*, that your GitLab
   token belongs to an active human who is currently a member of this project at
   the required level. No caching — if you were removed from the repo, the next
