@@ -444,7 +444,9 @@ locks for two keyholders; intentional, not redundant.
 have (`glab`). That's the whole point.
 
 **Can I seal a secret I'm not allowed to read?** Yes — sealing only needs the repo's
-public key. You can contribute a secret you can't read back. Harmless and intentional.
+public key, so you can contribute a value you can't read back. Harmless and intentional.
+(Whether that change *merges* is still gated by the CI write-authz check for the target
+environment — see ["Can I change a secret I can't read?"](#faq) above.)
 
 **What if the broker is down?** You can't *unseal* (fail-closed). You can still
 *seal* — that's offline.
