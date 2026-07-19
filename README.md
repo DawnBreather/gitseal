@@ -85,35 +85,54 @@ You only ever touch one tool: **`sealdctl`** on your laptop.
 
 ![unseal flow](docs/img/unseal-flow.png)
 
-Your laptop never holds a decryption key — only your normal GitLab token. That's
-what makes revocation instant.
+Your laptop never holds a decryption key. You prove *who you are* with the SSH key you
+already use for git (preferred) — or a GitLab token as a fallback. Either way the broker
+re-checks your live membership, which is what makes revocation instant.
+
+### How you authenticate: SSH key (default) or token
+
+`unseal` prefers **SSH challenge-response** and falls back to a token:
+
+- **SSH key (default, recommended).** The broker sends a one-time nonce; `sealdctl` signs
+  it with your SSH key (via `ssh-agent` or `SEALD_SSH_KEY`) and returns the signature. The
+  private key never leaves your laptop, and the signed proof is single-use, so it can't be
+  replayed like a bearer token. **No registration:** the broker maps your key's
+  fingerprint to your GitLab identity by reading your project membership and your GitLab
+  **profile SSH keys** (`GET /users/:id/keys`) — so if the key is on your GitLab profile
+  and you're a project member, it just works.
+- **GitLab token (fallback).** If no SSH signer is found, `sealdctl` uses your GitLab PAT
+  (from `glab`, or `GITLAB_TOKEN`). Force either mode with `--auth=ssh` / `--auth=pat`.
 
 ## Install (developer)
 
-`sealdctl` is a single static binary. You also need a GitLab token, which you
-almost certainly already have via [`glab`](https://gitlab.com/gitlab-org/cli).
+`sealdctl` is a single static binary. For the default SSH flow you just need your git SSH
+key loaded in `ssh-agent` (you almost certainly already have this) and that key present on
+your GitLab profile.
 
 ```bash
-# 1. log in to GitLab once — this is the token sealdctl will use
-glab auth login --hostname gitlab.example.com   # your GitLab host
+# 1. make sure your GitLab SSH key is available (agent or an explicit path)
+ssh-add -l                    # should list the key you use for GitLab
+#    (or point sealdctl at a specific key: export SEALD_SSH_KEY=~/.ssh/id_ed25519)
 
 # 2. install sealdctl from source (needs Go 1.26+)
 go install github.com/dawnbreather/gitseal/cmd/sealdctl@latest
 
-# 3. verify it can see your token + the broker
+# 3. verify it can reach the broker + resolve your identity
 sealdctl doctor
-```
 
-`sealdctl doctor` prints `✓ GitLab PAT resolved`, your repo config, and the broker
-URL. If it can't find a token: `export GITLAB_TOKEN=glpat-...`.
+# (optional) token fallback if you'd rather not use SSH:
+glab auth login --hostname gitlab.example.com   # or: export GITLAB_TOKEN=glpat-...
+#    then run unseal with --auth=pat
+```
 
 Optional env knobs (sensible defaults baked in):
 
 | Var | Default | Meaning |
 |---|---|---|
 | `SEALD_BROKER` | `https://seald.example.com` | broker URL |
-| `SEALD_HOST` | `gitlab.example.com` | GitLab host for token lookup |
-| `GITLAB_TOKEN` | *(from glab)* | explicit token override |
+| `SEALD_SSH_KEY` | *(ssh-agent)* | explicit SSH key path for challenge-auth |
+| `SEALD_HOST` | `gitlab.example.com` | GitLab host (for the token fallback) |
+| `GITLAB_TOKEN` | *(from glab)* | explicit PAT for the token fallback |
 
 ## Setup (developer)
 
@@ -240,8 +259,9 @@ Deploy and operate the broker, manage keys, onboard repos, handle offboarding.
 
 ![architecture](docs/img/architecture.png)
 
-- **`sealdctl`** (laptop CLI) — seals offline; for unseal it forwards the user's
-  GitLab token + the ciphertext to the broker. Never holds a decryption key.
+- **`sealdctl`** (laptop CLI) — seals offline; for unseal it proves the user's identity
+  to the broker (SSH-signed challenge by default, or a GitLab token) alongside the
+  ciphertext. Never holds a decryption key.
 - **`sealdbroker`** (in-cluster) — stateless. Holds every repo's **private** key,
   each individually wrapped under its own KEK, so it only ever unwraps the one repo
   in the request. On every unseal it:
@@ -440,8 +460,9 @@ locks for two keyholders; intentional, not redundant.
 
 ## FAQ
 
-**Do I need a new account or password?** No — you use the GitLab token you already
-have (`glab`). That's the whole point.
+**Do I need a new account or password?** No — you authenticate with the SSH key you
+already use for git (or a GitLab token as a fallback). Nothing new to create. That's the
+whole point.
 
 **Can I seal a secret I'm not allowed to read?** Yes — sealing only needs the repo's
 public key, so you can contribute a value you can't read back. Harmless and intentional.
