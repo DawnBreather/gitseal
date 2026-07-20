@@ -1,0 +1,57 @@
+{{- $b := .Values.broker -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gitseal.broker.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+spec:
+  type: {{ $b.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+  ports:
+    - name: http
+      port: {{ $b.service.port }}
+      targetPort: 8080
+      protocol: TCP
+{{- if and $b.peerFanout.enabled (gt (int $b.replicaCount) 1) }}
+---
+# Headless Service for peer discovery: a recipient registration lands on one replica
+# and is fanned out to the rest so the soft-state registry stays coherent.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gitseal.broker.name" . }}-peers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+{{- end }}
+{{- if $b.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gitseal.broker.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ $b.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+{{- end }}

@@ -1,0 +1,65 @@
+# GoReleaser config for the sealdctl CLI.
+# Produces cross-platform binaries + archives + checksums, attached to the GitHub
+# Release on each vX.Y.Z tag (see .github/workflows/release.yml).
+#
+# Only sealdctl is released as a binary — sealdbroker / gitseal-controller /
+# seald-materialize ship as container images (release.yml) and via the Helm chart.
+version: 2
+
+project_name: gitseal
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sealdctl
+    main: ./cmd/sealdctl
+    binary: sealdctl
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: sealdctl
+    ids: [sealdctl]
+    name_template: "sealdctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Windows gets a .zip; everything else a .tar.gz.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: dawnbreather
+    name: gitseal
+  # Keep a draft off; publish immediately on tag.
+  draft: false
+  prerelease: auto

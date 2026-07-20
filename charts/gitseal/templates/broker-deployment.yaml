@@ -1,0 +1,156 @@
+{{- $b := .Values.broker -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gitseal.broker.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $b.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+    spec:
+      # The broker reaches the k8s API for nothing — it talks to GitLab, not kube.
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if eq $b.podAntiAffinity "hard" }}
+      # One replica per node: a single node loss can't take the whole broker down.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+              topologyKey: kubernetes.io/hostname
+      {{- else if eq $b.podAntiAffinity "soft" }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ include "gitseal.broker.name" . }}
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      {{- with $b.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $b.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ include "gitseal.broker.name" . }}
+          image: {{ include "gitseal.broker.image" . | quote }}
+          imagePullPolicy: {{ $b.image.pullPolicy }}
+          env:
+            - name: SEALD_GITLAB_URL
+              value: {{ $b.gitlabURL | quote }}
+            - name: SEALD_LISTEN
+              value: {{ $b.listen | quote }}
+            - name: SEALD_REQUIRE_CF
+              value: {{ $b.requireCF | quote }}
+            - name: SEALD_KEYS_DIR
+              value: {{ $b.keystore.mountPath | quote }}
+            - name: SEALD_REGISTRY_DIR
+              value: {{ $b.registry.mountPath | quote }}
+            - name: SEALD_IDENTITY_INTERVAL
+              value: {{ $b.identityInterval | quote }}
+            {{- with $b.reloadInterval }}
+            - name: SEALD_RELOAD_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $b.credentialsSecret }}
+            - name: SEALD_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $b.credentialsSecret }}
+                  key: {{ $b.serviceTokenKey }}
+                  optional: true
+            - name: SEALD_SYSTEM_HOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $b.credentialsSecret }}
+                  key: {{ $b.systemHookTokenKey }}
+                  optional: true
+            - name: SEALD_REGISTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $b.credentialsSecret }}
+                  key: {{ $b.registerTokenKey }}
+                  optional: true
+            {{- end }}
+            {{- if and $b.peerFanout.enabled (gt (int $b.replicaCount) 1) }}
+            - name: SEALD_PEER_DNS
+              value: {{ printf "%s-peers.%s.svc.cluster.local" (include "gitseal.broker.name" .) .Release.Namespace | quote }}
+            - name: SEALD_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: keys
+              mountPath: {{ $b.keystore.mountPath }}
+              readOnly: true
+            - name: registry
+              mountPath: {{ $b.registry.mountPath }}
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          # Distroless image: no exec preStop. The broker drains in-process on
+          # SIGTERM (flips /readyz to 503, waits for endpoints to drop, then exits).
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+      volumes:
+        - name: keys
+          secret:
+            # OUT-OF-BAND: seeded by `sealdctl admin onboard --apply`, NEVER by this
+            # chart. fail-closed — no keystore Secret → broker won't start.
+            secretName: {{ $b.keystore.secretName }}
+            optional: false
+        - name: registry
+          projected:
+            sources:
+              - configMap:
+                  name: {{ $b.registry.projectsConfigMap }}
+                  optional: true
+                  items:
+                    - key: projects.json
+                      path: projects.json
+              - secret:
+                  name: {{ $b.registry.identitySecret }}
+                  optional: true
+                  items:
+                    - key: users.json
+                      path: users.json
+                    - key: userkeys.json
+                      path: userkeys.json

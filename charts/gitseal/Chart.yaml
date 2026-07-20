@@ -1,0 +1,23 @@
+apiVersion: v2
+name: gitseal
+description: >-
+  GitLab-membership-gated secret management: a broker that decrypts repo secrets
+  only after a live GitLab access check, plus an optional controller for declarative
+  per-environment onboarding.
+type: application
+# Chart version is overwritten at release time (see .github/workflows/release.yml);
+# appVersion tracks the container image tag the values default to.
+version: 0.1.0
+appVersion: "0.12.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/dawnbreather/gitseal
+sources:
+  - https://github.com/dawnbreather/gitseal
+keywords:
+  - secrets
+  - gitlab
+  - secrets-management
+  - age-encryption
+  - rbac
+maintainers:
+  - name: Slava Kim

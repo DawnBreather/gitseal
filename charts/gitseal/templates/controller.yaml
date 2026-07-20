@@ -1,0 +1,108 @@
+{{- if .Values.controller.enabled -}}
+{{- $c := .Values.controller -}}
+{{- $ns := .Release.Namespace -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "gitseal.controller.name" . }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.controller.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "gitseal.controller.name" . }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.controller.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [{{ .Values.crds.group | quote }}]
+    resources: ["managedenvironments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [{{ .Values.crds.group | quote }}]
+    resources: ["managedenvironments/status"]
+    verbs: ["get", "update", "patch"]
+  # Writes the per-(project,env) materializer identity Secret in this namespace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "gitseal.controller.name" . }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.controller.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "gitseal.controller.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "gitseal.controller.name" . }}
+    namespace: {{ $ns }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gitseal.controller.name" . }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ include "gitseal.controller.name" . }}
+    {{- include "gitseal.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single reconciler; never two overlapping during a rollout
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "gitseal.controller.name" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "gitseal.controller.name" . }}
+    spec:
+      serviceAccountName: {{ include "gitseal.controller.name" . }}
+      automountServiceAccountToken: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ printf "%s:%s" $c.image.repository $c.image.tag | quote }}
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          env:
+            - name: SEALD_BROKER
+              value: {{ $c.broker | quote }}
+            - name: SEALD_CLUSTER
+              value: {{ $c.cluster | quote }}
+            - name: SEALD_KEY_NAMESPACE
+              value: {{ $c.keyNamespace | default $ns | quote }}
+            - name: SEALD_RECONCILE_INTERVAL
+              value: {{ $c.reconcileInterval | quote }}
+            - name: SEALD_REGISTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.registerTokenSecret }}
+                  key: {{ $c.registerTokenKey }}
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+{{- end }}

@@ -1,0 +1,70 @@
+{{- if and .Values.crds.install .Values.controller.enabled -}}
+{{- $group := .Values.crds.group -}}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: managedenvironments.{{ $group }}
+  labels:
+    {{- include "gitseal.labels" . | nindent 4 }}
+  annotations:
+    # Keep the CRD on `helm uninstall` so live CRs / data aren't dropped by accident.
+    "helm.sh/resource-policy": keep
+spec:
+  group: {{ $group }}
+  scope: Namespaced
+  names:
+    kind: ManagedEnvironment
+    listKind: ManagedEnvironmentList
+    plural: managedenvironments
+    singular: managedenvironment
+    shortNames: [menv]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [project, projectRecipient, env, namespace]
+              properties:
+                project:
+                  type: string
+                  description: >-
+                    Project id/slug scoping the per-(project,env) materializer key.
+                projectRecipient:
+                  type: string
+                  description: The project's age public key (its identity in the broker registry).
+                env:
+                  type: string
+                  description: Environment name (prod/preprod/staging/…). Its own crypto boundary.
+                namespace:
+                  type: string
+                  description: Target namespace the materializer delivers Secrets into.
+                minLevel:
+                  type: integer
+                  description: GitLab access level required to change this env's secrets.
+                  default: 30
+            status:
+              type: object
+              properties:
+                recipient:
+                  type: string
+                phase:
+                  type: string
+                  description: Pending | Registered | Error.
+                lastRegistered:
+                  type: string
+                message:
+                  type: string
+      additionalPrinterColumns:
+        - { name: Project,   type: string, jsonPath: .spec.projectRecipient }
+        - { name: Env,       type: string, jsonPath: .spec.env }
+        - { name: Namespace, type: string, jsonPath: .spec.namespace }
+        - { name: Phase,     type: string, jsonPath: .status.phase }
+      subresources:
+        status: {}
+{{- end }}

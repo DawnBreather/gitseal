@@ -42,12 +42,18 @@ const (
 	defaultHost   = "gitlab.example.com"
 )
 
+// version is stamped at release time via -ldflags "-X main.version=...".
+// Defaults to "dev" for `go install` / source builds.
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version", "--version", "-v":
+		fmt.Println("sealdctl", version)
 	case "seal":
 		cmdSeal(os.Args[2:])
 	case "reseal":

@@ -1,0 +1,30 @@
+gitseal broker installed as {{ include "gitseal.broker.name" . }} in namespace {{ .Release.Namespace }}.
+
+⚠️  The broker will NOT become Ready until its keystore Secret exists — this chart does
+    NOT create it (keys must never be baked into a chart). Seed it out-of-band:
+
+      sealdctl admin onboard --apply        # creates/patches Secret "{{ .Values.broker.keystore.secretName }}"
+
+    Until then the pod stays NotReady (readyz requires >=1 key). That's fail-closed by design.
+
+Optional, to enable SSH auth + identity index + dynamic onboarding, create the
+credentials Secret "{{ .Values.broker.credentialsSecret }}" with any of these keys
+(all optional, features degrade gracefully if absent):
+  - {{ .Values.broker.serviceTokenKey }}      (non-admin read_api GitLab token)
+  - {{ .Values.broker.systemHookTokenKey }}   (GitLab system-hook shared secret)
+  - {{ .Values.broker.registerTokenKey }}     (controller registration shared secret)
+
+Reach the broker in-cluster at:
+  http://{{ include "gitseal.broker.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.broker.service.port }}
+
+{{- if .Values.controller.enabled }}
+
+Controller enabled: onboard an environment by applying a ManagedEnvironment CR
+(group {{ .Values.crds.group }}) in namespace {{ .Release.Namespace }}.
+{{- else }}
+
+Controller is disabled (controller.enabled=false). Enable it for declarative
+per-environment onboarding via ManagedEnvironment CRs.
+{{- end }}
+
+Full docs: https://github.com/dawnbreather/gitseal

@@ -114,10 +114,18 @@ your GitLab profile.
 ssh-add -l                    # should list the key you use for GitLab
 #    (or point sealdctl at a specific key: export SEALD_SSH_KEY=~/.ssh/id_ed25519)
 
-# 2. install sealdctl from source (needs Go 1.26+)
+# 2. install sealdctl  (pick one)
+#    a) download a release binary (linux/macOS/windows × amd64/arm64):
+#       grab the archive for your platform from the Releases page, e.g. on linux/amd64:
+VER=$(curl -fsSL https://api.github.com/repos/dawnbreather/gitseal/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+')
+curl -fsSL "https://github.com/dawnbreather/gitseal/releases/download/${VER}/sealdctl_${VER#v}_linux_amd64.tar.gz" \
+  | tar -xz -C ~/.local/bin sealdctl
+#    (checksums.txt is published alongside — verify with sha256sum -c if you like)
+#    b) or build from source (needs Go 1.26+):
 go install github.com/dawnbreather/gitseal/cmd/sealdctl@latest
 
 # 3. verify it can reach the broker + resolve your identity
+sealdctl version
 sealdctl doctor
 
 # (optional) token fallback if you'd rather not use SSH:
@@ -291,32 +299,38 @@ bundle format with its per-secret access level).
 
 ## Install / deploy the broker
 
-The broker runs in the `example` cluster, deployed by **ArgoCD** from
-`infra-repo/apps/seald/` — you don't `kubectl apply` it by hand. Layout:
-
-```
-infra-repo/apps/seald/
-├── application.yaml              # ArgoCD Application (project: platform, wave 1)
-└── manifests/
-    ├── deployment.yaml           # 2 replicas, distroless, workers-only, digest-pinned
-    ├── service.yaml              # ClusterIP :8080
-    ├── httproute.yaml            # seald.example.com → broker (via Envoy Gateway)
-    ├── seald-bundle.sealedsecret.yaml      # the per-repo private keys (encrypted)
-    └── dockerhub-pull.sealedsecret.yaml    # pull secret for the private image
-```
-
-Tagged releases publish multi-arch images to GHCR automatically (see
-`.github/workflows/release.yml`): `ghcr.io/dawnbreather/gitseal/sealdbroker`,
-`.../gitseal-controller`, `.../seald-materialize`. To build one yourself:
+The broker (and optional controller) ship as a **Helm chart**, published as an OCI
+artifact to GHCR on every release. Two replicas, hard pod-anti-affinity, and a PDB are
+on by default so a single node loss can't take the broker down.
 
 ```bash
-docker build -t ghcr.io/dawnbreather/gitseal/sealdbroker:X.Y.Z .
-docker push       ghcr.io/dawnbreather/gitseal/sealdbroker:X.Y.Z
-# digest-pin the resulting @sha256:... in your Deployment manifest.
+helm install gitseal oci://ghcr.io/dawnbreather/gitseal/charts/gitseal \
+  --namespace seald --create-namespace \
+  --set broker.gitlabURL=https://gitlab.yourcompany.com
 ```
 
-The broker is configured via env (`SEALD_GITLAB_URL`, `SEALD_BUNDLE_PATH`,
-`SEALD_LISTEN`, `SEALD_REQUIRE_CF`) — all set in the Deployment.
+The broker won't be Ready until its **keystore Secret** exists — the chart deliberately
+never creates key material (see [bootstrap](#setup-bootstrap-keys--onboard-repos)). Seed
+it with `sealdctl admin onboard --apply`; readiness (`/readyz`) is positive only once
+≥1 key is loaded (fail-closed).
+
+Everything is values-driven — key ones:
+
+| Value | Default | Purpose |
+|---|---|---|
+| `broker.gitlabURL` | `https://gitlab.example.com` | GitLab base URL for the live membership check |
+| `broker.replicaCount` | `2` | ≥2 → anti-affinity + PDB + peer fan-out |
+| `broker.keystore.secretName` | `seald-broker-keystore` | out-of-band Secret holding per-repo private keys |
+| `broker.credentialsSecret` | `seald-broker-registry` | optional Secret: service/system-hook/register tokens |
+| `controller.enabled` | `false` | deploy the ManagedEnvironment controller + CRD |
+
+See [`charts/gitseal/values.yaml`](charts/gitseal/values.yaml) for the full list. The
+three images (`sealdbroker`, `gitseal-controller`, `seald-materialize`) are published
+multi-arch to `ghcr.io/dawnbreather/gitseal/*` by the release workflow.
+
+> Prefer GitOps? Point Argo CD / Flux at the OCI chart, or render it
+> (`helm template`) into your manifests repo. The chart is the portable core; wire the
+> out-of-band Secrets (keystore, credentials) however your platform seeds secrets.
 
 ## Setup: bootstrap keys & onboard repos
 

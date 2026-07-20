@@ -1,0 +1,107 @@
+# Default values for the gitseal chart.
+#
+# SECURITY: this chart NEVER creates key material or tokens. The broker's private-key
+# keystore and its registry/token Secrets are seeded OUT-OF-BAND (e.g. via
+# `sealdctl admin onboard --apply`) and only REFERENCED here by name. A chart that
+# baked keys would defeat the point.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Image pull secret(s) for the container registry (empty = public images).
+imagePullSecrets: []
+# - name: ghcr-pull
+
+# =====================================================================
+# Broker — the core. Holds per-repo private keys; decrypts only after a
+# live GitLab membership check. Always deployed.
+# =====================================================================
+broker:
+  image:
+    repository: ghcr.io/dawnbreather/gitseal/sealdbroker
+    tag: ""            # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+  replicaCount: 2      # >=2 recommended; paired with a PDB + anti-affinity below
+
+  # GitLab base URL the broker calls for the live membership check. REQUIRED.
+  gitlabURL: https://gitlab.example.com
+
+  listen: ":8080"
+  requireCF: false     # set true if fronting with Cloudflare Access
+
+  # Reconcile/poll cadences.
+  identityInterval: 5m # SSH identity-index reconcile (source of truth)
+  reloadInterval: ""   # keystore hot-reload poll; empty = broker default
+
+  # ---- keystore (private keys) — OUT-OF-BAND Secret, referenced only ----
+  # A Secret with one <projectID>.key.json data key per repo. Seeded by
+  # `sealdctl admin onboard --apply`. fail-closed: absent → broker won't start.
+  keystore:
+    secretName: seald-broker-keystore
+    mountPath: /etc/seald/keys
+
+  # ---- registry — projects.json (public policy) + users/userkeys (identity) ----
+  # Projected from a ConfigMap (public, reviewable) + a Secret (identity), both
+  # optional: until present, SSH auth is off but PAT unseal still works.
+  registry:
+    mountPath: /etc/seald/registry
+    projectsConfigMap: seald-broker-registry-projects  # key: projects.json
+    identitySecret: seald-broker-registry              # keys: users.json, userkeys.json
+
+  # ---- optional broker credentials (all from one Secret, all optional) ----
+  # Unset keys degrade gracefully (feature off), they don't break the broker.
+  credentialsSecret: seald-broker-registry
+  serviceTokenKey: service_token        # non-admin read_api PAT → SSH auth + identity index
+  systemHookTokenKey: system_hook_token # GitLab system-hook receiver (instant revocation)
+  registerTokenKey: register_token      # authenticates controller recipient registrations
+
+  # ---- peer fan-out (for replicaCount > 1) ----
+  # Headless Service so a recipient registration replicates to all replicas
+  # (avoids soft-state registry split-brain). Auto-wired to the headless svc.
+  peerFanout:
+    enabled: true
+
+  # ---- scheduling / resilience ----
+  # Hard anti-affinity keeps replicas on different nodes; the PDB keeps >=1 up
+  # through voluntary disruptions.
+  podAntiAffinity: hard   # hard | soft | none
+  pdb:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits:   { memory: 64Mi }
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+# =====================================================================
+# Controller — declarative per-environment onboarding (ManagedEnvironment
+# CRs). Optional; enable if you want GitOps onboarding.
+# =====================================================================
+controller:
+  enabled: false
+  image:
+    repository: ghcr.io/dawnbreather/gitseal/gitseal-controller
+    tag: "0.1.1"
+    pullPolicy: IfNotPresent
+  broker: https://seald.example.com   # broker URL the controller registers recipients with
+  cluster: ""                          # free-form cluster label stamped into registrations
+  keyNamespace: ""                     # defaults to the release namespace
+  reconcileInterval: 60s
+  # Uses the broker's register_token (same Secret) to authenticate registrations.
+  registerTokenSecret: seald-broker-registry
+  registerTokenKey: register_token
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits:   { memory: 64Mi }
+
+# Install the ManagedEnvironment CRD (needed only when controller.enabled).
+# Set false if you manage CRDs out-of-band.
+crds:
+  install: true
+  # CRD API group. Change only if you also build the controller for a custom group.
+  group: gitseal.example.com
